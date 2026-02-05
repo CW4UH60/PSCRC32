@@ -1,6 +1,13 @@
 using namespace System.Globalization
 using namespace System.Text
 
+param(
+    [string]$Path,
+    [bool]$IncludeRoot = $true,
+    [switch]$OutputJson,
+    [switch]$Gui
+)
+
 function New-UInt32FromHex {
     param([Parameter(Mandatory)][string]$HexNoPrefix)
     [uint32]::Parse($HexNoPrefix, [NumberStyles]::HexNumber, [CultureInfo]::InvariantCulture)
@@ -328,13 +335,6 @@ function Start-7ZipCrc32Gui {
     # Default matches: 7z h "<folder>"  (IncludeRoot = $true)
     Get-7ZipCrc32 -Path $fbd.SelectedPath -IncludeRoot $true | Format-List *
 }
-
-param(
-    [string]$Path,
-    [bool]$IncludeRoot = $true,
-    [switch]$OutputJson,
-    [switch]$Gui
-)
 
 if ($PSCommandPath -and ($MyInvocation.InvocationName -ne '.')) {
     if ($Path) {
