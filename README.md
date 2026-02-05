@@ -62,3 +62,5 @@ The checks cover:
 2. **Folder aggregate parity against 7-Zip** for contents-only mode (`7z h -scrcCRC32 "<TopFolder>*" -r`).
 3. **Known 7-Zip constants** for the fixture (`3ED73E74-00000003` include-root and `06F61F71-00000002` contents-only).
 4. **File mode CRC checks** confirming zero-byte files produce `00000000`.
+
+The workflow uploads `crc32-verification-artifacts` (including raw 7z outputs and JSON reports under `test-artifacts/`) so results can be independently reviewed after each run.
