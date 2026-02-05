@@ -1,8 +1,6 @@
 using namespace System.Globalization
 using namespace System.Text
 
-Add-Type -AssemblyName System.Windows.Forms
-
 function New-UInt32FromHex {
     param([Parameter(Mandatory)][string]$HexNoPrefix)
     [uint32]::Parse($HexNoPrefix, [NumberStyles]::HexNumber, [CultureInfo]::InvariantCulture)
@@ -133,8 +131,8 @@ function Get-7ZipFolderCrc32Aggregates {
         $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
         $itemFull = [System.IO.Path]::GetFullPath($Item)
 
-        $rootUri = [Uri]("file:///" + ($rootFull.Replace('\','/')) + "/")
-        $itemUri = [Uri]("file:///" + ($itemFull.Replace('\','/')))
+        $rootUri = [Uri]("file:///" + ($rootFull.Replace('\\','/')) + "/")
+        $itemUri = [Uri]("file:///" + ($itemFull.Replace('\\','/')))
 
         $relUri = $rootUri.MakeRelativeUri($itemUri)
         $rel = [Uri]::UnescapeDataString($relUri.OriginalString)
@@ -282,40 +280,77 @@ function Get-7ZipCrc32 {
     return Get-7ZipFolderCrc32Aggregates -FolderPath $Path -IncludeRoot $IncludeRoot
 }
 
-# ---- Picker: choose file OR folder ----
-$choice = [System.Windows.Forms.MessageBox]::Show(
-    "Click YES to pick a FILE, NO to pick a FOLDER.",
-    "7-Zip-style CRC32",
-    [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
-    [System.Windows.Forms.MessageBoxIcon]::Question
-)
+function Start-7ZipCrc32Gui {
+    [CmdletBinding()]
+    param()
 
-if ($choice -eq [System.Windows.Forms.DialogResult]::Cancel) {
-    Write-Host "Canceled."
-    return
-}
+    if (-not $IsWindows) {
+        throw "GUI mode requires Windows. Use -Path in CLI mode for CI and GitHub Actions."
+    }
 
-if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
-    $ofd = New-Object System.Windows.Forms.OpenFileDialog
-    $ofd.Title = "Select a file to compute CRC32"
-    $ofd.CheckFileExists = $true
-    if ($ofd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-        Write-Host "No file selected."
+    Add-Type -AssemblyName System.Windows.Forms
+
+    # ---- Picker: choose file OR folder ----
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "Click YES to pick a FILE, NO to pick a FOLDER.",
+        "7-Zip-style CRC32",
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Cancel) {
+        Write-Host "Canceled."
         return
     }
 
-    Get-7ZipCrc32 -Path $ofd.FileName | Format-List *
-    return
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Title = "Select a file to compute CRC32"
+        $ofd.CheckFileExists = $true
+        if ($ofd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+            Write-Host "No file selected."
+            return
+        }
+
+        Get-7ZipCrc32 -Path $ofd.FileName | Format-List *
+        return
+    }
+
+    $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
+    $fbd.Description = "Select a folder to compute 7-Zip-style CRC32 aggregates"
+    $fbd.ShowNewFolderButton = $false
+
+    if ($fbd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        Write-Host "No folder selected."
+        return
+    }
+
+    # Default matches: 7z h "<folder>"  (IncludeRoot = $true)
+    Get-7ZipCrc32 -Path $fbd.SelectedPath -IncludeRoot $true | Format-List *
 }
 
-$fbd = New-Object System.Windows.Forms.FolderBrowserDialog
-$fbd.Description = "Select a folder to compute 7-Zip-style CRC32 aggregates"
-$fbd.ShowNewFolderButton = $false
+param(
+    [string]$Path,
+    [bool]$IncludeRoot = $true,
+    [switch]$OutputJson,
+    [switch]$Gui
+)
 
-if ($fbd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-    Write-Host "No folder selected."
-    return
+if ($PSCommandPath -and ($MyInvocation.InvocationName -ne '.')) {
+    if ($Path) {
+        $result = Get-7ZipCrc32 -Path $Path -IncludeRoot $IncludeRoot
+        if ($OutputJson) {
+            $result | ConvertTo-Json -Depth 4 -Compress
+        } else {
+            $result | Format-List *
+        }
+        return
+    }
+
+    if ($Gui -or ($IsWindows -and -not $env:CI -and -not $env:GITHUB_ACTIONS)) {
+        Start-7ZipCrc32Gui
+        return
+    }
+
+    throw "No -Path provided. In non-interactive mode (CI/GitHub Actions), pass -Path '<file-or-folder>'."
 }
-
-# Default matches: 7z h "<folder>"  (IncludeRoot = $true)
-Get-7ZipCrc32 -Path $fbd.SelectedPath -IncludeRoot $true | Format-List *
