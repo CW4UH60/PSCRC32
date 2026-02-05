@@ -13,6 +13,8 @@ function New-UInt32FromHex {
     [uint32]::Parse($HexNoPrefix, [NumberStyles]::HexNumber, [CultureInfo]::InvariantCulture)
 }
 
+Write-Host "Chris is so cool...."
+
 function Get-Crc32Table {
     $Polynomial = New-UInt32FromHex "EDB88320" # CRC-32/IEEE (PKZIP / 7-Zip) reversed poly
     $table = New-Object 'uint32[]' 256
