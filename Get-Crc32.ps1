@@ -287,11 +287,31 @@ function Get-7ZipCrc32 {
     return Get-7ZipFolderCrc32Aggregates -FolderPath $Path -IncludeRoot $IncludeRoot
 }
 
-function Start-7ZipCrc32Gui {
+function Test-IsWindowsPlatform {
     [CmdletBinding()]
     param()
 
-    if (-not $IsWindows) {
+    $isWindowsVariable = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue
+    if ($null -ne $isWindowsVariable) {
+        return [bool]$isWindowsVariable.Value
+    }
+
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+}
+
+function Start-7ZipCrc32Gui {
+    [CmdletBinding()]
+    param(
+        [Nullable[bool]]$IsWindowsOverride
+    )
+
+    $isWindows = if ($PSBoundParameters.ContainsKey('IsWindowsOverride')) {
+        [bool]$IsWindowsOverride
+    } else {
+        Test-IsWindowsPlatform
+    }
+
+    if (-not $isWindows) {
         throw "GUI mode requires Windows. Use -Path in CLI mode for CI and GitHub Actions."
     }
 
@@ -336,7 +356,26 @@ function Start-7ZipCrc32Gui {
     Get-7ZipCrc32 -Path $fbd.SelectedPath -IncludeRoot $true | Format-List *
 }
 
-if ($PSCommandPath -and ($MyInvocation.InvocationName -ne '.')) {
+function Invoke-GetCrc32EntryPoint {
+    [CmdletBinding()]
+    param(
+        [string]$Path,
+        [bool]$IncludeRoot = $true,
+        [switch]$OutputJson,
+        [switch]$Gui,
+        [Nullable[bool]]$IsWindowsOverride,
+        [scriptblock]$StartGuiAction = {
+            param($ResolvedIsWindows)
+            Start-7ZipCrc32Gui -IsWindowsOverride:$ResolvedIsWindows
+        }
+    )
+
+    $isWindows = if ($PSBoundParameters.ContainsKey('IsWindowsOverride')) {
+        [bool]$IsWindowsOverride
+    } else {
+        Test-IsWindowsPlatform
+    }
+
     if ($Path) {
         $result = Get-7ZipCrc32 -Path $Path -IncludeRoot $IncludeRoot
         if ($OutputJson) {
@@ -347,10 +386,14 @@ if ($PSCommandPath -and ($MyInvocation.InvocationName -ne '.')) {
         return
     }
 
-    if ($Gui -or ($IsWindows -and -not $env:CI -and -not $env:GITHUB_ACTIONS)) {
-        Start-7ZipCrc32Gui
+    if ($Gui -or ($isWindows -and -not $env:CI -and -not $env:GITHUB_ACTIONS)) {
+        & $StartGuiAction $isWindows
         return
     }
 
     throw "No -Path provided. In non-interactive mode (CI/GitHub Actions), pass -Path '<file-or-folder>'."
+}
+
+if ($PSCommandPath -and ($MyInvocation.InvocationName -ne '.')) {
+    Invoke-GetCrc32EntryPoint -Path $Path -IncludeRoot:$IncludeRoot -OutputJson:$OutputJson -Gui:$Gui
 }
