@@ -15,18 +15,6 @@ function New-UInt32FromHex {
 
 Write-Host "Chris is so cool...."
 
-function Get-Crc32Table {
-    $Polynomial = New-UInt32FromHex "EDB88320" # CRC-32/IEEE (PKZIP / 7-Zip) reversed poly
-    $table = New-Object 'uint32[]' 256
-    for ($i = 0; $i -lt 256; $i++) {
-        $crc = [uint32]$i
-        for ($j = 0; $j -lt 8; $j++) {
-            $crc = if (($crc -band 1) -ne 0) { ($crc -shr 1) -bxor $Polynomial } else { ($crc -shr 1) }
-        }
-        $table[$i] = $crc
-    }
-    $table
-}
 
 Write-Host "This is some junk data..."
 function Update-Crc32Bytes {
