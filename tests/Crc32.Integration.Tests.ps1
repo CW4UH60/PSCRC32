@@ -23,8 +23,31 @@ Describe '7-Zip CRC32 integration parity' {
             throw '7z executable not found. Set SEVEN_ZIP_EXE or install 7-Zip.'
         }
 
+
+        function Invoke-7Zip {
+            param(
+                [Parameter(Mandatory)][string]$SevenZipExe,
+                [Parameter(Mandatory)][string[]]$Arguments
+            )
+
+            $output = & $SevenZipExe @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+
+            $lines = @($output | ForEach-Object { [string]$_ })
+            if ($lines.Count -eq 1 -and [string]::IsNullOrWhiteSpace($lines[0])) {
+                $lines = @()
+            }
+
+            return [pscustomobject]@{
+                ExitCode = $exitCode
+                Lines = $lines
+                Text = ($lines -join "`n")
+                Command = "$SevenZipExe $($Arguments -join ' ')"
+            }
+        }
+
         function Parse-7ZipCrcOutput {
-            param([Parameter(Mandatory)][string[]]$OutputLines)
+            param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$OutputLines)
 
             $dataLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data:\s+' } | Select-Object -First 1
             $dataNamesLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data and names:\s+' } | Select-Object -First 1
@@ -91,11 +114,27 @@ Describe '7-Zip CRC32 integration parity' {
     }
 
     It 'matches 7z for folder include-root and contents-only modes' {
-        $includeRootRaw = & $global:Fixture.SevenZip h -scrcCRC32 $global:Fixture.TopFolder 2>&1
-        $contentsRaw = & $global:Fixture.SevenZip h -scrcCRC32 (Join-Path $global:Fixture.TopFolder '*') -r 2>&1
+        $includeRootResult = Invoke-7Zip -SevenZipExe $global:Fixture.SevenZip -Arguments @('h', '-scrcCRC32', $global:Fixture.TopFolder)
+        $contentsResult = Invoke-7Zip -SevenZipExe $global:Fixture.SevenZip -Arguments @('h', '-scrcCRC32', (Join-Path $global:Fixture.TopFolder '*'), '-r')
 
-        $includeRootParsed = Parse-7ZipCrcOutput -OutputLines $includeRootRaw
-        $contentsParsed = Parse-7ZipCrcOutput -OutputLines $contentsRaw
+        if ($includeRootResult.ExitCode -ne 0) {
+            throw "7z include-root command failed (exit $($includeRootResult.ExitCode)). Command: $($includeRootResult.Command)`n$($includeRootResult.Text)"
+        }
+
+        if ($contentsResult.ExitCode -ne 0) {
+            throw "7z contents-only command failed (exit $($contentsResult.ExitCode)). Command: $($contentsResult.Command)`n$($contentsResult.Text)"
+        }
+
+        if (-not $includeRootResult.Lines -or $includeRootResult.Lines.Count -eq 0) {
+            throw "7z include-root command produced no output. Command: $($includeRootResult.Command)"
+        }
+
+        if (-not $contentsResult.Lines -or $contentsResult.Lines.Count -eq 0) {
+            throw "7z contents-only command produced no output. Command: $($contentsResult.Command)"
+        }
+
+        $includeRootParsed = Parse-7ZipCrcOutput -OutputLines $includeRootResult.Lines
+        $contentsParsed = Parse-7ZipCrcOutput -OutputLines $contentsResult.Lines
 
         $scriptIncludeRoot = Invoke-RepoScript -TargetPath $global:Fixture.TopFolder -IncludeRoot:$true
         $scriptContentsOnly = Invoke-RepoScript -TargetPath $global:Fixture.TopFolder -IncludeRoot:$false
@@ -114,9 +153,9 @@ Describe '7-Zip CRC32 integration parity' {
         }
         catch {
             Write-Host '--- 7z include-root output ---'
-            Write-Host ($includeRootRaw -join "`n")
+            Write-Host $includeRootResult.Text
             Write-Host '--- 7z contents-only output ---'
-            Write-Host ($contentsRaw -join "`n")
+            Write-Host $contentsResult.Text
             Write-Host '--- parsed include-root ---'
             $includeRootParsed | Format-List * | Out-String | Write-Host
             Write-Host '--- parsed contents-only ---'
