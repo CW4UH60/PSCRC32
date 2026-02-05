@@ -28,6 +28,7 @@ function Get-Crc32Table {
     $table
 }
 
+Write-Host "This is some junk data..."
 function Update-Crc32Bytes {
     param(
         [Parameter(Mandatory)][uint32]$Crc,
