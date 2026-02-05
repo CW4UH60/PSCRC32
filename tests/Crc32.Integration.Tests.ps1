@@ -388,4 +388,28 @@ Describe '7-Zip CRC32 integration parity' {
             Write-ArtifactJson -Name 'crc32-non-empty-file-mode-report.json' -Data $report | Out-Null
         }
     }
+
+    It 'honors -Gui explicit mode with Windows detection and guardrails' {
+        . $global:Fixture.ScriptPath
+
+        $guiInvocation = [pscustomobject]@{
+            Called = $false
+            IsWindows = $null
+        }
+
+        $guiAction = {
+            param($ResolvedIsWindows)
+            $guiInvocation.Called = $true
+            $guiInvocation.IsWindows = $ResolvedIsWindows
+        }
+
+        { Invoke-GetCrc32EntryPoint -Gui -IsWindowsOverride:$false -StartGuiAction $guiAction } |
+            Should -Not -Throw
+
+        $guiInvocation.Called | Should -BeTrue
+        $guiInvocation.IsWindows | Should -BeFalse
+
+        { Start-7ZipCrc32Gui -IsWindowsOverride:$false } |
+            Should -Throw 'GUI mode requires Windows*'
+    }
 }
