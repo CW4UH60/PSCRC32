@@ -49,25 +49,40 @@ Describe '7-Zip CRC32 integration parity' {
         }
 
         function Parse-7ZipCrcOutput {
-            param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$OutputLines)
+            param(
+                [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$OutputLines,
+                [bool]$RequireDataAndNames = $true
+            )
 
             $dataLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data:\s+' } | Select-Object -First 1
             $dataNamesLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data and names:\s+' } | Select-Object -First 1
 
-            if (-not $dataLine -or -not $dataNamesLine) {
-                throw "Unable to parse CRC lines from 7z output.`n$($OutputLines -join "`n")"
+            if (-not $dataLine) {
+                throw "Unable to parse CRC data line from 7z output.`n$($OutputLines -join "`n")"
+            }
+
+            if ($RequireDataAndNames -and -not $dataNamesLine) {
+                throw "Unable to parse CRC data-and-names line from 7z output.`n$($OutputLines -join "`n")"
             }
 
             $data = [regex]::Match($dataLine, '^CRC32\s+for data:\s+([0-9A-F\-]+)$')
-            $dataNames = [regex]::Match($dataNamesLine, '^CRC32\s+for data and names:\s+([0-9A-F\-]+)$')
+            if (-not $data.Success) {
+                throw "CRC data line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+            }
 
-            if (-not $data.Success -or -not $dataNames.Success) {
-                throw "CRC line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+            $dataAndNamesValue = $null
+            if ($dataNamesLine) {
+                $dataNames = [regex]::Match($dataNamesLine, '^CRC32\s+for data and names:\s+([0-9A-F\-]+)$')
+                if (-not $dataNames.Success) {
+                    throw "CRC data-and-names line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+                }
+
+                $dataAndNamesValue = $dataNames.Groups[1].Value.ToUpperInvariant()
             }
 
             [pscustomobject]@{
                 Data = $data.Groups[1].Value.ToUpperInvariant()
-                DataAndNames = $dataNames.Groups[1].Value.ToUpperInvariant()
+                DataAndNames = $dataAndNamesValue
             }
         }
 
@@ -81,6 +96,53 @@ Describe '7-Zip CRC32 integration parity' {
             $path = Join-Path $global:Fixture.ArtifactDir $Name
             $Data | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
             return $path
+        }
+
+        function Export-FixtureArtifacts {
+            param(
+                [Parameter(Mandatory)][string]$FixtureRoot,
+                [Parameter(Mandatory)][string]$ArtifactDir
+            )
+
+            if (-not (Test-Path -LiteralPath $FixtureRoot)) {
+                return $null
+            }
+
+            $topFolderPath = Join-Path $FixtureRoot 'TopFolder'
+            if (-not (Test-Path -LiteralPath $topFolderPath)) {
+                throw "Expected fixture folder '$topFolderPath' was not found."
+            }
+
+            $artifactTopFolder = Join-Path $ArtifactDir 'TopFolder'
+            if (Test-Path -LiteralPath $artifactTopFolder) {
+                Remove-Item -LiteralPath $artifactTopFolder -Recurse -Force
+            }
+
+            Copy-Item -LiteralPath $topFolderPath -Destination $ArtifactDir -Recurse -Force
+
+            # Ensure empty directories are preserved in zipped CI artifacts (hidden files can be excluded by upload-artifact defaults).
+            $artifactEmptyDir = Join-Path $artifactTopFolder 'emptyDir'
+            if ((Test-Path -LiteralPath $artifactEmptyDir) -and -not (Get-ChildItem -LiteralPath $artifactEmptyDir -Force | Select-Object -First 1)) {
+                Set-Content -LiteralPath (Join-Path $artifactEmptyDir 'emptyDir.keep') -Value '' -NoNewline -Encoding ASCII
+            }
+
+            $inventory = Get-ChildItem -LiteralPath $topFolderPath -Recurse -Force | ForEach-Object {
+                [pscustomobject]@{
+                    RelativePath = $_.FullName.Substring($FixtureRoot.TrimEnd('\', '/').Length).TrimStart('\', '/')
+                    Type = if ($_.PSIsContainer) { 'Directory' } else { 'File' }
+                    Length = if ($_.PSIsContainer) { $null } else { $_.Length }
+                }
+            }
+
+            $snapshotReport = [pscustomobject]@{
+                FixtureRoot = $FixtureRoot
+                ExportedRoot = $artifactTopFolder
+                Items = $inventory
+                GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
+            }
+
+            Write-ArtifactJson -Name 'fixture-snapshot-report.json' -Data $snapshotReport | Out-Null
+            return $artifactTopFolder
         }
 
         function Invoke-RepoScript {
@@ -105,11 +167,15 @@ Describe '7-Zip CRC32 integration parity' {
         $emptyDir = Join-Path $topFolder 'emptyDir'
         $file1 = Join-Path $nestedDir 'file.bin'
         $file2 = Join-Path $topFolder 'file2.txt'
+        $file3 = Join-Path $topFolder 'non-empty-text.txt'
+        $file4 = Join-Path $nestedDir 'non-empty-bytes.bin'
 
         New-Item -ItemType Directory -Path $nestedDir -Force | Out-Null
         New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
         New-Item -ItemType File -Path $file1 -Force | Out-Null
         New-Item -ItemType File -Path $file2 -Force | Out-Null
+        Set-Content -LiteralPath $file3 -Value 'abc' -NoNewline -Encoding ASCII
+        [System.IO.File]::WriteAllBytes($file4, [byte[]](0..255))
 
         $global:Fixture = [pscustomobject]@{
             SevenZip = $sevenZip
@@ -117,12 +183,18 @@ Describe '7-Zip CRC32 integration parity' {
             TopFolder = $topFolder
             File1 = $file1
             File2 = $file2
+            File3 = $file3
+            File4 = $file4
             ScriptPath = $scriptPath
             ArtifactDir = $artifactDir
         }
     }
 
     AfterAll {
+        if ($global:Fixture) {
+            Export-FixtureArtifacts -FixtureRoot $global:Fixture.Root -ArtifactDir $global:Fixture.ArtifactDir | Out-Null
+        }
+
         if ($global:Fixture -and (Test-Path -LiteralPath $global:Fixture.Root)) {
             Remove-Item -LiteralPath $global:Fixture.Root -Recurse -Force
         }
@@ -168,10 +240,10 @@ Describe '7-Zip CRC32 integration parity' {
             $scriptContentsOnly.'CRC32 checksum for data and names' | Should -Be $contentsParsed.DataAndNames
 
             # Guard against 7-Zip behavior/version drift.
-            $includeRootParsed.Data | Should -Be '00000000-00000000'
-            $includeRootParsed.DataAndNames | Should -Be '3ED73E74-00000003'
-            $contentsParsed.Data | Should -Be '00000000-00000000'
-            $contentsParsed.DataAndNames | Should -Be '06F61F71-00000002'
+            $includeRootParsed.Data | Should -Be '5E29CE35-00000000'
+            $includeRootParsed.DataAndNames | Should -Be '5E0C7D03-00000004'
+            $contentsParsed.Data | Should -Be '5E29CE35-00000000'
+            $contentsParsed.DataAndNames | Should -Be 'FE057358-00000002'
         }
         catch {
             Write-Host '--- 7z include-root output ---'
@@ -213,10 +285,10 @@ Describe '7-Zip CRC32 integration parity' {
                     Script = $scriptContentsOnly
                 }
                 ExpectedConstants = [pscustomobject]@{
-                    IncludeRootData = '00000000-00000000'
-                    IncludeRootDataAndNames = '3ED73E74-00000003'
-                    ContentsOnlyData = '00000000-00000000'
-                    ContentsOnlyDataAndNames = '06F61F71-00000002'
+                    IncludeRootData = '5E29CE35-00000000'
+                    IncludeRootDataAndNames = '5E0C7D03-00000004'
+                    ContentsOnlyData = '5E29CE35-00000000'
+                    ContentsOnlyDataAndNames = 'FE057358-00000002'
                 }
                 GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
             }
@@ -253,6 +325,67 @@ Describe '7-Zip CRC32 integration parity' {
                 GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
             }
             Write-ArtifactJson -Name 'crc32-file-mode-report.json' -Data $report | Out-Null
+        }
+    }
+
+    It 'matches expected CRC32 values for non-empty files in file mode' {
+        $file3Result = $null
+        $file4Result = $null
+        $file3SevenZip = $null
+        $file4SevenZip = $null
+        $file3SevenZipParsed = $null
+        $file4SevenZipParsed = $null
+
+        try {
+            $file3Result = Invoke-RepoScript -TargetPath $global:Fixture.File3
+            $file4Result = Invoke-RepoScript -TargetPath $global:Fixture.File4
+
+            $file3Result.'CRC32 checksum for data' | Should -Be '352441C2'
+            $file4Result.'CRC32 checksum for data' | Should -Be '29058C73'
+
+            $file3SevenZip = Invoke-7Zip -SevenZipExe $global:Fixture.SevenZip -Arguments @('h', '-scrcCRC32', $global:Fixture.File3)
+            $file4SevenZip = Invoke-7Zip -SevenZipExe $global:Fixture.SevenZip -Arguments @('h', '-scrcCRC32', $global:Fixture.File4)
+
+            if ($file3SevenZip.ExitCode -ne 0) {
+                throw "7z file3 command failed (exit $($file3SevenZip.ExitCode)). Command: $($file3SevenZip.Command)`n$($file3SevenZip.Text)"
+            }
+
+            if ($file4SevenZip.ExitCode -ne 0) {
+                throw "7z file4 command failed (exit $($file4SevenZip.ExitCode)). Command: $($file4SevenZip.Command)`n$($file4SevenZip.Text)"
+            }
+
+            $file3SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file3SevenZip.Lines -RequireDataAndNames:$false
+            $file4SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file4SevenZip.Lines -RequireDataAndNames:$false
+
+            $file3Result.'CRC32 checksum for data' | Should -Be $file3SevenZipParsed.Data
+            $file4Result.'CRC32 checksum for data' | Should -Be $file4SevenZipParsed.Data
+        }
+        catch {
+            Write-Host '--- script file3 object ---'
+            $file3Result | Format-List * | Out-String | Write-Host
+            Write-Host '--- script file4 object ---'
+            $file4Result | Format-List * | Out-String | Write-Host
+            Write-Host '--- 7z file3 output ---'
+            Write-Host $file3SevenZip.Text
+            Write-Host '--- 7z file4 output ---'
+            Write-Host $file4SevenZip.Text
+            throw
+        }
+        finally {
+            $report = [pscustomobject]@{
+                File3Path = $global:Fixture.File3
+                File4Path = $global:Fixture.File4
+                File3Result = $file3Result
+                File4Result = $file4Result
+                File37Zip = $file3SevenZipParsed
+                File47Zip = $file4SevenZipParsed
+                Expected = [pscustomobject]@{
+                    File3DataCrc = '352441C2'
+                    File4DataCrc = '29058C73'
+                }
+                GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
+            }
+            Write-ArtifactJson -Name 'crc32-non-empty-file-mode-report.json' -Data $report | Out-Null
         }
     }
 }
