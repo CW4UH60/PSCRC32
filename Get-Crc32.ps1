@@ -30,7 +30,7 @@ function Update-Crc32Bytes {
     param(
         [Parameter(Mandatory)][uint32]$Crc,
         [Parameter(Mandatory)][uint32[]]$Table,
-        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes,
         [int]$Offset = 0,
         [int]$Count = -1
     )
@@ -83,7 +83,7 @@ function Get-Crc32OfFileUInt32 {
 }
 
 function Get-Crc32OfBytesUInt32 {
-    param([Parameter(Mandatory)][byte[]]$Bytes)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes)
 
     $table = Get-Crc32Table
     $crc = New-UInt32FromHex "FFFFFFFF"
