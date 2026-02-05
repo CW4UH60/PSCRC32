@@ -120,6 +120,12 @@ Describe '7-Zip CRC32 integration parity' {
 
             Copy-Item -LiteralPath $topFolderPath -Destination $ArtifactDir -Recurse -Force
 
+            # Ensure empty directories are preserved in zipped CI artifacts.
+            $artifactEmptyDir = Join-Path $artifactTopFolder 'emptyDir'
+            if ((Test-Path -LiteralPath $artifactEmptyDir) -and -not (Get-ChildItem -LiteralPath $artifactEmptyDir -Force | Select-Object -First 1)) {
+                Set-Content -LiteralPath (Join-Path $artifactEmptyDir '.artifact-placeholder') -Value '' -NoNewline -Encoding ASCII
+            }
+
             $inventory = Get-ChildItem -LiteralPath $topFolderPath -Recurse -Force | ForEach-Object {
                 [pscustomobject]@{
                     RelativePath = $_.FullName.Substring($FixtureRoot.TrimEnd('\', '/').Length).TrimStart('\', '/')
