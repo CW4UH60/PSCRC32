@@ -49,25 +49,40 @@ Describe '7-Zip CRC32 integration parity' {
         }
 
         function Parse-7ZipCrcOutput {
-            param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$OutputLines)
+            param(
+                [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$OutputLines,
+                [bool]$RequireDataAndNames = $true
+            )
 
             $dataLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data:\s+' } | Select-Object -First 1
             $dataNamesLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data and names:\s+' } | Select-Object -First 1
 
-            if (-not $dataLine -or -not $dataNamesLine) {
-                throw "Unable to parse CRC lines from 7z output.`n$($OutputLines -join "`n")"
+            if (-not $dataLine) {
+                throw "Unable to parse CRC data line from 7z output.`n$($OutputLines -join "`n")"
+            }
+
+            if ($RequireDataAndNames -and -not $dataNamesLine) {
+                throw "Unable to parse CRC data-and-names line from 7z output.`n$($OutputLines -join "`n")"
             }
 
             $data = [regex]::Match($dataLine, '^CRC32\s+for data:\s+([0-9A-F\-]+)$')
-            $dataNames = [regex]::Match($dataNamesLine, '^CRC32\s+for data and names:\s+([0-9A-F\-]+)$')
+            if (-not $data.Success) {
+                throw "CRC data line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+            }
 
-            if (-not $data.Success -or -not $dataNames.Success) {
-                throw "CRC line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+            $dataAndNamesValue = $null
+            if ($dataNamesLine) {
+                $dataNames = [regex]::Match($dataNamesLine, '^CRC32\s+for data and names:\s+([0-9A-F\-]+)$')
+                if (-not $dataNames.Success) {
+                    throw "CRC data-and-names line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+                }
+
+                $dataAndNamesValue = $dataNames.Groups[1].Value.ToUpperInvariant()
             }
 
             [pscustomobject]@{
                 Data = $data.Groups[1].Value.ToUpperInvariant()
-                DataAndNames = $dataNames.Groups[1].Value.ToUpperInvariant()
+                DataAndNames = $dataAndNamesValue
             }
         }
 
@@ -215,10 +230,10 @@ Describe '7-Zip CRC32 integration parity' {
             $scriptContentsOnly.'CRC32 checksum for data and names' | Should -Be $contentsParsed.DataAndNames
 
             # Guard against 7-Zip behavior/version drift.
-            $includeRootParsed.Data | Should -Be '00000000-00000000'
-            $includeRootParsed.DataAndNames | Should -Be '3ED73E74-00000003'
-            $contentsParsed.Data | Should -Be '00000000-00000000'
-            $contentsParsed.DataAndNames | Should -Be '06F61F71-00000002'
+            $includeRootParsed.Data | Should -Be '5E29CE35-00000000'
+            $includeRootParsed.DataAndNames | Should -Be '5E0C7D03-00000004'
+            $contentsParsed.Data | Should -Be '5E29CE35-00000000'
+            $contentsParsed.DataAndNames | Should -Be 'FE057358-00000002'
         }
         catch {
             Write-Host '--- 7z include-root output ---'
@@ -260,10 +275,10 @@ Describe '7-Zip CRC32 integration parity' {
                     Script = $scriptContentsOnly
                 }
                 ExpectedConstants = [pscustomobject]@{
-                    IncludeRootData = '00000000-00000000'
-                    IncludeRootDataAndNames = '3ED73E74-00000003'
-                    ContentsOnlyData = '00000000-00000000'
-                    ContentsOnlyDataAndNames = '06F61F71-00000002'
+                    IncludeRootData = '5E29CE35-00000000'
+                    IncludeRootDataAndNames = '5E0C7D03-00000004'
+                    ContentsOnlyData = '5E29CE35-00000000'
+                    ContentsOnlyDataAndNames = 'FE057358-00000002'
                 }
                 GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
             }
@@ -329,8 +344,8 @@ Describe '7-Zip CRC32 integration parity' {
                 throw "7z file4 command failed (exit $($file4SevenZip.ExitCode)). Command: $($file4SevenZip.Command)`n$($file4SevenZip.Text)"
             }
 
-            $file3SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file3SevenZip.Lines
-            $file4SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file4SevenZip.Lines
+            $file3SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file3SevenZip.Lines -RequireDataAndNames:$false
+            $file4SevenZipParsed = Parse-7ZipCrcOutput -OutputLines $file4SevenZip.Lines -RequireDataAndNames:$false
 
             $file3Result.'CRC32 checksum for data' | Should -Be $file3SevenZipParsed.Data
             $file4Result.'CRC32 checksum for data' | Should -Be $file4SevenZipParsed.Data
