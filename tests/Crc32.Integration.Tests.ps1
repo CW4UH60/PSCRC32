@@ -1,0 +1,148 @@
+$ErrorActionPreference = 'Stop'
+
+Describe '7-Zip CRC32 integration parity' {
+    BeforeAll {
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $scriptPath = Join-Path $repoRoot 'Get-Crc32.ps1'
+
+        function Get-7ZipExe {
+            if ($env:SEVEN_ZIP_EXE -and (Test-Path -LiteralPath $env:SEVEN_ZIP_EXE)) {
+                return $env:SEVEN_ZIP_EXE
+            }
+
+            $cmd = Get-Command 7z -ErrorAction SilentlyContinue
+            if ($cmd) {
+                return $cmd.Source
+            }
+
+            $default = 'C:\Program Files\7-Zip\7z.exe'
+            if (Test-Path -LiteralPath $default) {
+                return $default
+            }
+
+            throw '7z executable not found. Set SEVEN_ZIP_EXE or install 7-Zip.'
+        }
+
+        function Parse-7ZipCrcOutput {
+            param([Parameter(Mandatory)][string[]]$OutputLines)
+
+            $dataLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data:\s+' } | Select-Object -First 1
+            $dataNamesLine = $OutputLines | Where-Object { $_ -match '^CRC32\s+for data and names:\s+' } | Select-Object -First 1
+
+            if (-not $dataLine -or -not $dataNamesLine) {
+                throw "Unable to parse CRC lines from 7z output.`n$($OutputLines -join "`n")"
+            }
+
+            $data = [regex]::Match($dataLine, '^CRC32\s+for data:\s+([0-9A-F\-]+)$')
+            $dataNames = [regex]::Match($dataNamesLine, '^CRC32\s+for data and names:\s+([0-9A-F\-]+)$')
+
+            if (-not $data.Success -or -not $dataNames.Success) {
+                throw "CRC line format mismatch in 7z output.`n$($OutputLines -join "`n")"
+            }
+
+            [pscustomobject]@{
+                Data = $data.Groups[1].Value.ToUpperInvariant()
+                DataAndNames = $dataNames.Groups[1].Value.ToUpperInvariant()
+            }
+        }
+
+        function Invoke-RepoScript {
+            param(
+                [Parameter(Mandatory)][string]$TargetPath,
+                [bool]$IncludeRoot = $true
+            )
+
+            $json = & $scriptPath -Path $TargetPath -IncludeRoot:$IncludeRoot -OutputJson 2>&1
+            if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+                throw "Get-Crc32.ps1 failed for path '$TargetPath'. Output:`n$($json -join "`n")"
+            }
+
+            $jsonText = ($json | Out-String).Trim()
+            return ($jsonText | ConvertFrom-Json)
+        }
+
+        $sevenZip = Get-7ZipExe
+        $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("crc32-integration-{0}" -f [guid]::NewGuid().ToString('N'))
+        $topFolder = Join-Path $fixtureRoot 'TopFolder'
+        $nestedDir = Join-Path $topFolder 'A\B'
+        $emptyDir = Join-Path $topFolder 'emptyDir'
+        $file1 = Join-Path $nestedDir 'file.bin'
+        $file2 = Join-Path $topFolder 'file2.txt'
+
+        New-Item -ItemType Directory -Path $nestedDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+        New-Item -ItemType File -Path $file1 -Force | Out-Null
+        New-Item -ItemType File -Path $file2 -Force | Out-Null
+
+        $global:Fixture = [pscustomobject]@{
+            SevenZip = $sevenZip
+            Root = $fixtureRoot
+            TopFolder = $topFolder
+            File1 = $file1
+            File2 = $file2
+            ScriptPath = $scriptPath
+        }
+    }
+
+    AfterAll {
+        if ($global:Fixture -and (Test-Path -LiteralPath $global:Fixture.Root)) {
+            Remove-Item -LiteralPath $global:Fixture.Root -Recurse -Force
+        }
+    }
+
+    It 'matches 7z for folder include-root and contents-only modes' {
+        $includeRootRaw = & $global:Fixture.SevenZip h -scrcCRC32 $global:Fixture.TopFolder 2>&1
+        $contentsRaw = & $global:Fixture.SevenZip h -scrcCRC32 (Join-Path $global:Fixture.TopFolder '*') -r 2>&1
+
+        $includeRootParsed = Parse-7ZipCrcOutput -OutputLines $includeRootRaw
+        $contentsParsed = Parse-7ZipCrcOutput -OutputLines $contentsRaw
+
+        $scriptIncludeRoot = Invoke-RepoScript -TargetPath $global:Fixture.TopFolder -IncludeRoot:$true
+        $scriptContentsOnly = Invoke-RepoScript -TargetPath $global:Fixture.TopFolder -IncludeRoot:$false
+
+        try {
+            $scriptIncludeRoot.'CRC32 checksum for data' | Should -Be $includeRootParsed.Data
+            $scriptIncludeRoot.'CRC32 checksum for data and names' | Should -Be $includeRootParsed.DataAndNames
+            $scriptContentsOnly.'CRC32 checksum for data' | Should -Be $contentsParsed.Data
+            $scriptContentsOnly.'CRC32 checksum for data and names' | Should -Be $contentsParsed.DataAndNames
+
+            # Guard against 7-Zip behavior/version drift.
+            $includeRootParsed.Data | Should -Be '00000000-00000000'
+            $includeRootParsed.DataAndNames | Should -Be '3ED73E74-00000003'
+            $contentsParsed.Data | Should -Be '00000000-00000000'
+            $contentsParsed.DataAndNames | Should -Be '06F61F71-00000002'
+        }
+        catch {
+            Write-Host '--- 7z include-root output ---'
+            Write-Host ($includeRootRaw -join "`n")
+            Write-Host '--- 7z contents-only output ---'
+            Write-Host ($contentsRaw -join "`n")
+            Write-Host '--- parsed include-root ---'
+            $includeRootParsed | Format-List * | Out-String | Write-Host
+            Write-Host '--- parsed contents-only ---'
+            $contentsParsed | Format-List * | Out-String | Write-Host
+            Write-Host '--- script include-root object ---'
+            $scriptIncludeRoot | Format-List * | Out-String | Write-Host
+            Write-Host '--- script contents-only object ---'
+            $scriptContentsOnly | Format-List * | Out-String | Write-Host
+            throw
+        }
+    }
+
+    It 'returns 00000000 for zero-byte files in file mode' {
+        $file1Result = Invoke-RepoScript -TargetPath $global:Fixture.File1
+        $file2Result = Invoke-RepoScript -TargetPath $global:Fixture.File2
+
+        try {
+            $file1Result.'CRC32 checksum for data' | Should -Be '00000000'
+            $file2Result.'CRC32 checksum for data' | Should -Be '00000000'
+        }
+        catch {
+            Write-Host '--- script file1 object ---'
+            $file1Result | Format-List * | Out-String | Write-Host
+            Write-Host '--- script file2 object ---'
+            $file2Result | Format-List * | Out-String | Write-Host
+            throw
+        }
+    }
+}

@@ -53,11 +53,12 @@ Or run without `-Path` on Windows in a non-CI environment to open the picker aut
 
 This repository includes:
 
-- `checks/verify-crc32.ps1`: validation checks for CRC32 correctness.
-- `.github/workflows/crc32-checks.yml`: workflow that runs the checks on push/PR.
+- `tests/Crc32.Integration.Tests.ps1`: Pester integration tests that build a 7-Zip parity fixture and compare this script output to live `7z` output.
+- `.github/workflows/crc32-checks.yml`: workflow that installs 7-Zip (prefers 25.01), installs Pester, and runs integration tests on `windows-latest`.
 
 The checks cover:
 
-1. **Known CRC32 vectors** (`""`, `"123456789"`, and `"The quick brown fox jumps over the lazy dog"`).
-2. **File-vs-bytes consistency** (same data produces the same CRC through both code paths).
-3. **Folder aggregate mutation check** (changing file content changes both folder aggregate CRCs).
+1. **Folder aggregate parity against 7-Zip** for include-root mode (`7z h -scrcCRC32 "<TopFolder>"`).
+2. **Folder aggregate parity against 7-Zip** for contents-only mode (`7z h -scrcCRC32 "<TopFolder>*" -r`).
+3. **Known 7-Zip constants** for the fixture (`3ED73E74-00000003` include-root and `06F61F71-00000002` contents-only).
+4. **File mode CRC checks** confirming zero-byte files produce `00000000`.
