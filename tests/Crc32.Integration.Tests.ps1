@@ -108,15 +108,19 @@ Describe '7-Zip CRC32 integration parity' {
                 return $null
             }
 
-            $snapshotDir = Join-Path $ArtifactDir 'fixture-snapshot'
-            if (Test-Path -LiteralPath $snapshotDir) {
-                Remove-Item -LiteralPath $snapshotDir -Recurse -Force
+            $topFolderPath = Join-Path $FixtureRoot 'TopFolder'
+            if (-not (Test-Path -LiteralPath $topFolderPath)) {
+                throw "Expected fixture folder '$topFolderPath' was not found."
             }
 
-            New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $FixtureRoot '*') -Destination $snapshotDir -Recurse -Force
+            $artifactTopFolder = Join-Path $ArtifactDir 'TopFolder'
+            if (Test-Path -LiteralPath $artifactTopFolder) {
+                Remove-Item -LiteralPath $artifactTopFolder -Recurse -Force
+            }
 
-            $inventory = Get-ChildItem -LiteralPath $FixtureRoot -Recurse -Force | ForEach-Object {
+            Copy-Item -LiteralPath $topFolderPath -Destination $ArtifactDir -Recurse -Force
+
+            $inventory = Get-ChildItem -LiteralPath $topFolderPath -Recurse -Force | ForEach-Object {
                 [pscustomobject]@{
                     RelativePath = $_.FullName.Substring($FixtureRoot.TrimEnd('\', '/').Length).TrimStart('\', '/')
                     Type = if ($_.PSIsContainer) { 'Directory' } else { 'File' }
@@ -126,13 +130,13 @@ Describe '7-Zip CRC32 integration parity' {
 
             $snapshotReport = [pscustomobject]@{
                 FixtureRoot = $FixtureRoot
-                SnapshotDir = $snapshotDir
+                ExportedRoot = $artifactTopFolder
                 Items = $inventory
                 GeneratedAtUtc = [DateTime]::UtcNow.ToString('o')
             }
 
             Write-ArtifactJson -Name 'fixture-snapshot-report.json' -Data $snapshotReport | Out-Null
-            return $snapshotDir
+            return $artifactTopFolder
         }
 
         function Invoke-RepoScript {
